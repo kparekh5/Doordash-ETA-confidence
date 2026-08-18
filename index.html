@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Will it actually arrive on time?</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <main class="wrap">
+    <header>
+      <p class="eyebrow">ETA confidence estimator</p>
+      <h1>Will it actually arrive on time?</h1>
+      <p class="sub">Delivery apps give you a time window. This estimates how much to trust it, and why.</p>
+    </header>
+
+    <section class="card form-card">
+      <div class="field">
+        <label for="distance">Distance from restaurant</label>
+        <input type="range" id="distance" min="0.5" max="8" step="0.5" value="2.5">
+        <span class="field-val" id="distanceVal">2.5 mi</span>
+      </div>
+
+      <div class="field">
+        <label for="complexity">What are you ordering</label>
+        <select id="complexity">
+          <option value="fast" selected>Fast food / quick counter</option>
+          <option value="sitdown">Sit-down restaurant</option>
+          <option value="grocery">Grocery / multi-item</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="time">Time of day</label>
+        <select id="time">
+          <option value="off">Off-peak (mid-afternoon, late night)</option>
+          <option value="lunch">Lunch rush (11:30–1:30)</option>
+          <option value="dinner" selected>Dinner rush (5:30–8:00)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="weather">Weather right now</label>
+        <select id="weather">
+          <option value="clear" selected>Clear</option>
+          <option value="rain">Rain</option>
+          <option value="snow">Snow / ice</option>
+        </select>
+      </div>
+
+      <button id="estimateBtn">Estimate my ETA</button>
+    </section>
+
+    <section class="card result-card" id="resultCard" hidden>
+      <div class="result-headline">
+        <span class="eta-range" id="etaRange">—</span>
+        <span class="confidence-badge" id="confidenceBadge">—</span>
+      </div>
+
+      <div class="breakdown" id="breakdown"></div>
+
+      <p class="explain" id="explainText"></p>
+    </section>
+
+    <footer>
+      <p>This is a simple, transparent scoring model — not a trained ML model — built to show the <em>shape</em> of the problem: prep time + travel time + a widening confidence band as conditions get less predictable. See <a href="README.md">README</a> for the reasoning and what a production version would need.</p>
+    </footer>
+  </main>
+
+<script src="script.js"></script>
+</body>
+</html>
