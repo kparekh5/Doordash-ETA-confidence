@@ -20,16 +20,27 @@ for every single order, at huge scale.
 
 ## What this does
 
-You pick a distance, an order type, a time of day, and current weather.
-The tool:
+You pick a distance, an order type, a time of day, current weather, and
+how consistent that restaurant's kitchen tends to be. The tool:
 
 1. Estimates prep time + travel time + a rush-hour buffer
-2. Adds up how many "risk factors" are stacked against this specific
-   order (long distance, bad weather, rush hour, a complex order — and
-   an extra bump when several of those compound at once)
-3. Widens or narrows the estimated window based on that risk score, and
+2. Scores how many "risk factors" are stacked against this specific
+   order (long distance, bad weather, rush hour, a complex order, a
+   less predictable kitchen — with an extra bump when several compound
+   at once, since a bad-weather rush-hour order is riskier than each
+   factor added independently)
+3. Widens or narrows the estimated window based on that score, and
    labels it High / Medium / Low confidence
-4. Shows the breakdown, instead of just a number
+4. Visualizes it as a probability curve — narrower and taller for a
+   confident estimate, wider and flatter when conditions are shakier —
+   instead of just showing a badge
+5. Shows the itemized breakdown underneath, instead of just a number
+
+The curve is illustrative, not statistically fit — it's a Gaussian
+shape centered on the estimate, shaded across the confidence window, to
+make the *idea* of "this could be off by more or less" visible rather
+than abstract. It is not derived from real historical delivery-time
+variance.
 
 ## Why it's built this way
 
