@@ -6,7 +6,7 @@
 
 const distanceInput = document.getElementById('distance');
 const distanceVal = document.getElementById('distanceVal');
-const complexityInput = document.getElementById('complexity');
+const complexityGroup = document.getElementById('complexity');
 const timeInput = document.getElementById('time');
 const weatherInput = document.getElementById('weather');
 const reliabilityInput = document.getElementById('reliability');
@@ -14,12 +14,46 @@ const estimateBtn = document.getElementById('estimateBtn');
 const resultCard = document.getElementById('resultCard');
 const etaRange = document.getElementById('etaRange');
 const confidenceBadge = document.getElementById('confidenceBadge');
+const confidenceText = document.getElementById('confidenceText');
 const breakdown = document.getElementById('breakdown');
 const explainText = document.getElementById('explainText');
 const curveCanvas = document.getElementById('curve');
 
+const COMPLEXITY_ORDER = ['fast', 'sitdown', 'grocery'];
+let complexityValue = complexityGroup.dataset.value || 'fast';
+
+// --- distance slider: live label + fill track ---
+function syncDistanceUI() {
+  const min = parseFloat(distanceInput.min);
+  const max = parseFloat(distanceInput.max);
+  const value = parseFloat(distanceInput.value);
+  const pct = ((value - min) / (max - min)) * 100;
+  distanceInput.style.setProperty('--range-progress', `${pct}%`);
+  distanceVal.textContent = `${value} mi`;
+}
 distanceInput.addEventListener('input', () => {
-  distanceVal.textContent = `${distanceInput.value} mi`;
+  syncDistanceUI();
+  requestAnimationFrame(estimate);
+});
+
+// --- segmented "what are you ordering" control ---
+complexityGroup.addEventListener('click', (event) => {
+  const btn = event.target.closest('.segmented-option');
+  if (!btn) return;
+  complexityValue = btn.dataset.value;
+  complexityGroup.dataset.value = complexityValue;
+  complexityGroup.style.setProperty('--seg-index', COMPLEXITY_ORDER.indexOf(complexityValue));
+  [...complexityGroup.querySelectorAll('.segmented-option')].forEach((el) => {
+    const active = el === btn;
+    el.classList.toggle('is-active', active);
+    el.setAttribute('aria-checked', String(active));
+  });
+  estimate();
+});
+
+// --- live recompute on any other field change ---
+[timeInput, weatherInput, reliabilityInput].forEach((el) => {
+  el.addEventListener('change', estimate);
 });
 
 // Baseline prep time by order type (minutes)
@@ -53,9 +87,14 @@ function riskPoints(distance, complexity, time, weather, reliability) {
   return points;
 }
 
+let currentLow = null;
+let currentHigh = null;
+let hasRevealed = false;
+let pulseTimeout = null;
+
 function estimate() {
   const distance = parseFloat(distanceInput.value);
-  const complexity = complexityInput.value;
+  const complexity = complexityValue;
   const time = timeInput.value;
   const weather = weatherInput.value;
   const reliability = reliabilityInput.value;
@@ -90,8 +129,8 @@ function estimate() {
     explain = 'Several factors are stacking up at once — treat the low end of the range as optimistic.';
   }
 
-  etaRange.textContent = `${low}–${high} min`;
-  confidenceBadge.textContent = confidence;
+  animateEtaRange(low, high);
+  confidenceText.textContent = confidence;
   confidenceBadge.className = `confidence-badge ${confidenceClass}`;
   explainText.textContent = explain;
 
@@ -102,8 +141,9 @@ function estimate() {
     <div class="breakdown-row"><span class="k">Kitchen reliability</span><span class="v">${reliabilityLabel(reliability)}</span></div>
   `;
 
+  revealResultCard();
   drawCurve(mean, stdDev, low, high);
-  resultCard.hidden = false;
+  triggerPulse();
 }
 
 function reliabilityLabel(r) {
@@ -112,81 +152,156 @@ function reliabilityLabel(r) {
   return 'Unpredictable';
 }
 
+// Unhide the card (and run its one-time entrance animation) before any
+// layout-dependent code — like the canvas width measurement — runs.
+// Doing this AFTER drawing was the original bug: a hidden card lays out
+// at 0 width, so the curve was measured and drawn into a 0px buffer.
+function revealResultCard() {
+  if (resultCard.hidden) {
+    resultCard.hidden = false;
+    resultCard.classList.add('is-visible');
+  }
+}
+
+function triggerPulse() {
+  if (!hasRevealed) {
+    // Skip the "just updated" flash on the very first paint —
+    // the entrance animation already communicates that.
+    hasRevealed = true;
+    return;
+  }
+  resultCard.classList.remove('is-updating');
+  // eslint-disable-next-line no-unused-expressions
+  resultCard.offsetWidth; // force reflow so the animation can restart
+  resultCard.classList.add('is-updating');
+  clearTimeout(pulseTimeout);
+  pulseTimeout = setTimeout(() => resultCard.classList.remove('is-updating'), 650);
+}
+
+// Ease-out count-up between the previous and next ETA window so the
+// number feels alive rather than snapping on every field change.
+function animateEtaRange(low, high) {
+  if (currentLow === null) {
+    currentLow = low;
+    currentHigh = high;
+    etaRange.textContent = `${low}–${high} min`;
+    return;
+  }
+  const startLow = currentLow;
+  const startHigh = currentHigh;
+  currentLow = low;
+  currentHigh = high;
+  if (startLow === low && startHigh === high) return;
+
+  const duration = 320;
+  const startTime = performance.now();
+
+  function tick(now) {
+    const t = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const l = Math.round(startLow + (low - startLow) * eased);
+    const h = Math.round(startHigh + (high - startHigh) * eased);
+    etaRange.textContent = `${l}–${h} min`;
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
 // Draws an illustrative bell curve — a Gaussian shape centered on the
 // estimate, shaded across the confidence window. This is NOT fit to
 // real data; it's a visual way to show that a narrower band means a
 // taller, tighter curve, and a wider band means a flatter, less certain
 // one. Real variance would come from historical delivery-time data.
+let lastCurveParams = null;
+
 function drawCurve(mean, stdDev, low, high) {
-  const ctx = curveCanvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
   const w = curveCanvas.clientWidth;
-  const h = 120;
+  const h = 140;
+  if (w === 0) return; // parent not laid out yet — bail rather than draw garbage
+  lastCurveParams = [mean, stdDev, low, high];
+
+  const dpr = window.devicePixelRatio || 1;
   curveCanvas.width = w * dpr;
   curveCanvas.height = h * dpr;
+  const ctx = curveCanvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
   const rangeMin = Math.max(0, mean - stdDev * 3.2);
   const rangeMax = mean + stdDev * 3.2;
   const xOf = (t) => ((t - rangeMin) / (rangeMax - rangeMin)) * w;
-
   const gaussian = (x) => Math.exp(-0.5 * Math.pow((x - mean) / stdDev, 2));
 
-  const baseline = h - 22;
-  const peakHeight = h - 32;
+  const baseline = h - 28;
+  const peakHeight = h - 44;
 
   // shaded confidence region
+  const fill = ctx.createLinearGradient(0, baseline - peakHeight, 0, baseline);
+  fill.addColorStop(0, 'rgba(214,73,31,0.22)');
+  fill.addColorStop(1, 'rgba(214,73,31,0.03)');
   ctx.beginPath();
   ctx.moveTo(xOf(low), baseline);
-  for (let t = low; t <= high; t += (high - low) / 40) {
+  for (let t = low; t <= high; t += (high - low) / 48) {
     ctx.lineTo(xOf(t), baseline - gaussian(t) * peakHeight);
   }
   ctx.lineTo(xOf(high), baseline);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(200,90,46,0.14)';
+  ctx.fillStyle = fill;
   ctx.fill();
 
   // curve line
   ctx.beginPath();
-  for (let t = rangeMin; t <= rangeMax; t += (rangeMax - rangeMin) / 100) {
+  for (let t = rangeMin; t <= rangeMax; t += (rangeMax - rangeMin) / 120) {
     const y = baseline - gaussian(t) * peakHeight;
     if (t === rangeMin) ctx.moveTo(xOf(t), y);
     else ctx.lineTo(xOf(t), y);
   }
-  ctx.strokeStyle = '#C85A2E';
+  ctx.strokeStyle = '#D6491F';
   ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
   ctx.stroke();
 
   // baseline axis
   ctx.beginPath();
   ctx.moveTo(0, baseline);
   ctx.lineTo(w, baseline);
-  ctx.strokeStyle = '#E9E1D4';
+  ctx.strokeStyle = '#E9DFCB';
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // mean marker
-  ctx.beginPath();
-  ctx.moveTo(xOf(mean), baseline);
-  ctx.lineTo(xOf(mean), baseline - gaussian(mean) * peakHeight);
-  ctx.strokeStyle = '#8F3E22';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([2, 2]);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // dashed guides + labels at the ACTUAL displayed low/high bounds
+  ctx.font = '500 10.5px "IBM Plex Mono", monospace';
+  [low, high].forEach((t) => {
+    ctx.beginPath();
+    ctx.setLineDash([2, 3]);
+    ctx.moveTo(xOf(t), baseline);
+    ctx.lineTo(xOf(t), baseline - gaussian(t) * peakHeight);
+    ctx.strokeStyle = '#8F2E12';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
 
-  // axis labels
-  ctx.fillStyle = '#7A7166';
-  ctx.font = '10px Inter, sans-serif';
-  ctx.fillText(`${Math.round(rangeMin)} min`, 2, h - 6);
-  ctx.textAlign = 'right';
-  ctx.fillText(`${Math.round(rangeMax)} min`, w - 2, h - 6);
+  ctx.fillStyle = '#8F2E12';
   ctx.textAlign = 'center';
-  ctx.fillText('likely window', xOf(mean), h - 6);
+  ctx.fillText(`${low}m`, xOf(low), h - 8);
+  ctx.fillText(`${high}m`, xOf(high), h - 8);
+
+  ctx.fillStyle = '#8A7C68';
+  ctx.fillText('likely window', xOf(mean), 12);
   ctx.textAlign = 'left';
 }
 
 estimateBtn.addEventListener('click', estimate);
-window.addEventListener('resize', () => { if (!resultCard.hidden) estimate(); });
+
+// Redraw (not full recompute) on resize so the curve stays crisp at the
+// canvas's new width without re-animating the ETA numbers or pulse.
+let resizeRaf = null;
+window.addEventListener('resize', () => {
+  if (resultCard.hidden || !lastCurveParams) return;
+  cancelAnimationFrame(resizeRaf);
+  resizeRaf = requestAnimationFrame(() => drawCurve(...lastCurveParams));
+});
+
+syncDistanceUI();
 estimate(); // show an initial result on load
